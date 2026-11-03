@@ -23,9 +23,9 @@ class ChatgptXBlock(StudioEditableXBlockMixin, XBlock):
     )
     model_name = String(
         display_name="Model name",
-        default="small-model",
+        default="",
         scope=Scope.settings,
-        help="Model ID as offered by the API endpoint (free text)",
+        help="Model ID as offered by the API endpoint (free text). Required - ask your platform admin for the available models.",
     )
     api_key = String(
         default="your-openai-api-key-here",
@@ -253,6 +253,11 @@ class ChatgptXBlock(StudioEditableXBlockMixin, XBlock):
                 }
             )
         messages.extend(self.conversation_history)
+
+        if not (self.model_name or "").strip():
+            return {
+                "answer": "No model configured. Please set the model name in the component settings."
+            }
 
         # Call ChatGPT with some max_tokens to control length (4)
         try:
