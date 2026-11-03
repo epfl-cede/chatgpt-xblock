@@ -21,19 +21,9 @@ class ChatgptXBlock(StudioEditableXBlockMixin, XBlock):
     )
     model_name = String(
         display_name="Model name",
-        default="gpt-3.5-turbo",
+        default="epfl-aiaas/small",
         scope=Scope.settings,
-        help="Select a ChatGPT model.",
-        values=[
-            {"display_name": "GPT-3.5 Turbo",      "value": "gpt-3.5-turbo"},
-            {"display_name": "GPT-4",              "value": "gpt-4"},
-            {"display_name": "O3 mini",              "value": "o3-mini"},
-            {"display_name": "O1 mini",              "value": "o1-mini"},
-            {"display_name": "GPT 4O",              "value": "gpt-4o"},
-            {"display_name": "GPT 4 Turbo",              "value": "gpt-4-turbo"},
-            {"display_name": "GPT 4O Mini",              "value": "gpt-4o-mini"},
-            {"display_name": "chatgpt 4O Latest",              "value": "gpt-4o-mini"},
-        ],
+        help="Model ID as offered by the API endpoint (free text). EPFL Chat RCP models include epfl-aiaas/small, epfl-aiaas/large, swiss-ai/Apertus-v1.5-70B, openai/gpt-oss-120b.",
     )
     api_key = String(
         default="your-openai-api-key-here",
@@ -152,7 +142,9 @@ class ChatgptXBlock(StudioEditableXBlockMixin, XBlock):
             return {'error': 'Unable to initialize OpenAI client. Please check configuration.'}
 
 
-        # 3. Guardrails: Check user prompt with OpenAI Moderation
+        # 3. Guardrails: Check user prompt with OpenAI Moderation. The chat.rcp
+        # gateway rejects /moderations with 403 (passthrough disabled), so fail
+        # open there rather than blocking all questions.
         try:
             mod_resp = client.moderations.create(input=question)
             if mod_resp.results[0].flagged:
@@ -162,7 +154,7 @@ class ChatgptXBlock(StudioEditableXBlockMixin, XBlock):
         except AuthenticationError as e:
             return {"answer": "Authentication error. Please check your API key in studio setting."}
         except Exception as e:
-            return {"answer": f"Moderation error: {str(e)}"}
+            pass
 
         # 2. Provide a conversation-like experience:
         # Add user's question to conversation history
