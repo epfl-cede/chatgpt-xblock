@@ -23,7 +23,7 @@ class ChatgptXBlock(StudioEditableXBlockMixin, XBlock):
     )
     model_name = String(
         display_name="Model name",
-        default="swiss-ai/Apertus-v1.5-8B",
+        default="small-model",
         scope=Scope.settings,
         help="Model ID as offered by the API endpoint (free text)",
     )
