@@ -138,3 +138,15 @@
 .chatgpt__answer #answer-text a {
   color: #1a73e8;
 }
+.chatgpt__answer #answer-text del {
+  color: #888;
+}
+.chatgpt__answer #answer-text hr {
+  border: none;
+  border-top: 1px solid #ddd;
+  margin: 15px 0;
+}
+.chatgpt__answer #answer-text li input[type="checkbox"] {
+  margin-right: 6px;
+  accent-color: #4CAF50;
+}
