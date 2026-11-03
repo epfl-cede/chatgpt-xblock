@@ -110,6 +110,10 @@ class ChatgptXBlock(StudioEditableXBlockMixin, XBlock):
 
         frag = Fragment(final_html)
         frag.add_css(self.resource_string("static/css/chatgptxblock.css"))
+        # Vendor libs for markdown rendering of model answers (loaded before
+        # the block JS, which uses global `marked` and `DOMPurify`).
+        frag.add_javascript(self.resource_string("static/js/vendor/marked.min.js"))
+        frag.add_javascript(self.resource_string("static/js/vendor/purify.min.js"))
         frag.add_javascript(self.resource_string("static/js/src/chatgptxblock.js"))
         frag.initialize_js('ChatgptXBlock')
         return frag

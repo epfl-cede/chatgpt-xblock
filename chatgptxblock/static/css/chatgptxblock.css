@@ -80,3 +80,61 @@
 .chatgpt__reflection button:hover {
   background: #007B9E;
 }
+
+/* Markdown output from the model */
+.chatgpt__answer #answer-text {
+  line-height: 1.5;
+}
+.chatgpt__answer #answer-text p {
+  margin: 0 0 10px 0;
+}
+.chatgpt__answer #answer-text ul,
+.chatgpt__answer #answer-text ol {
+  margin: 0 0 10px 0;
+  padding-left: 25px;
+}
+.chatgpt__answer #answer-text li {
+  margin-bottom: 4px;
+}
+.chatgpt__answer #answer-text h1,
+.chatgpt__answer #answer-text h2,
+.chatgpt__answer #answer-text h3,
+.chatgpt__answer #answer-text h4 {
+  margin: 15px 0 8px 0;
+}
+.chatgpt__answer #answer-text code {
+  background: #f4f4f4;
+  padding: 2px 4px;
+  border-radius: 3px;
+  font-family: monospace;
+  font-size: 90%;
+}
+.chatgpt__answer #answer-text pre {
+  background: #f4f4f4;
+  padding: 10px;
+  border-radius: 4px;
+  overflow-x: auto;
+}
+.chatgpt__answer #answer-text pre code {
+  padding: 0;
+  background: none;
+}
+.chatgpt__answer #answer-text blockquote {
+  border-left: 3px solid #ccc;
+  margin: 10px 0;
+  padding: 2px 12px;
+  color: #555;
+}
+.chatgpt__answer #answer-text table {
+  border-collapse: collapse;
+  margin: 10px 0;
+}
+.chatgpt__answer #answer-text th,
+.chatgpt__answer #answer-text td {
+  border: 1px solid #ccc;
+  padding: 5px 8px;
+  text-align: left;
+}
+.chatgpt__answer #answer-text a {
+  color: #1a73e8;
+}

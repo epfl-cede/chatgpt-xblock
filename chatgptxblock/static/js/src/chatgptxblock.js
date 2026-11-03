@@ -37,7 +37,8 @@ function ChatgptXBlock(runtime, element) {
           success: function(response) {
               // If there's an 'answer' key, show it. Otherwise, show an error.
               if (response.answer) {
-                  answerText.text(response.answer);
+                  // Render the model's markdown; sanitize before inserting HTML.
+                  answerText.html(DOMPurify.sanitize(marked.parse(response.answer)));
               } else {
                   showError('No answer received.');
               }
