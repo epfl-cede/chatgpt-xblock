@@ -1,4 +1,5 @@
 import os
+import re
 import pkg_resources
 from openai import OpenAI, AuthenticationError
 from xblock.core import XBlock
@@ -78,6 +79,75 @@ class ChatgptXBlock(StudioEditableXBlockMixin, XBlock):
         """Helper for loading resources from the static folder."""
         data = pkg_resources.resource_string(__name__, path)
         return data.decode("utf8")
+
+    def _collect_course_context(self, max_chars=4000):
+        """
+        Collect the course context around this unit: course/section/subsection
+        titles plus the text of sibling components in the same vertical, so the
+        model can ground its answers in the material the student is looking at.
+        Returns a string or None if the runtime doesn't allow course access
+        (e.g. workbench, library content, studio preview edge cases).
+        """
+        try:
+            from xmodule.modulestore.django import modulestore
+
+            store = modulestore()
+            course_key = getattr(self.runtime, "course_id", None)
+            if course_key is None:
+                return None
+
+            # Walk up the parent chain: vertical -> sequential -> chapter -> course
+            location = self.scope_ids.usage_id
+            ancestors = []
+            while True:
+                parent_loc = store.get_parent_location(location)
+                if parent_loc is None:
+                    break
+                parent = store.get_item(parent_loc)
+                ancestors.append(parent)
+                location = parent_loc
+            if not ancestors:
+                return None
+
+            vertical = ancestors[0]
+            subsection = ancestors[1].display_name if len(ancestors) > 1 else None
+            section = ancestors[2].display_name if len(ancestors) > 2 else None
+            course_name = ancestors[-1].display_name
+
+            def clean(text, limit):
+                text = re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", text or "", flags=re.S | re.I)
+                text = re.sub(r"<[^>]+>", " ", text)
+                text = re.sub(r"\s+", " ", text).strip()
+                return text[:limit]
+
+            # Text of the sibling components on the same page (the vertical)
+            siblings = []
+            remaining = max_chars
+            for child_id in vertical.get_children():
+                child = store.get_item(child_id)
+                if getattr(child, "category", None) == self.category:
+                    continue  # don't include this xblock itself
+                name = clean(getattr(child, "display_name", "") or "", 120)
+                body = ""
+                if child.category in ("html", "problem", "video"):
+                    body = clean(getattr(child, "data", "") or "", remaining)
+                if name or body:
+                    part = name + (": " + body if body else "")
+                    siblings.append("- " + part)
+                    remaining -= len(part)
+                    if remaining <= 0:
+                        break
+
+            parts = ["Course: " + (course_name or "")]
+            if section:
+                parts.append("Section: " + section)
+            if subsection:
+                parts.append("Subsection: " + subsection)
+            if siblings:
+                parts.append("Content on the current page:\n" + "\n".join(siblings))
+            return "\n".join(parts)
+        except Exception:
+            return None
 
     def student_view(self, context=None):
         """
@@ -169,8 +239,19 @@ class ChatgptXBlock(StudioEditableXBlockMixin, XBlock):
         if len(self.conversation_history) > 6:
             self.conversation_history.pop(0)
 
-        # Prepare messages with a system prompt plus the conversation so far
+        # Prepare messages: system prompt, optional course context, then the
+        # conversation so far.
         messages = [{"role": "system", "content": self.context_text}]
+        course_context = self._collect_course_context()
+        if course_context:
+            messages.append({
+                "role": "system",
+                "content": (
+                    "The student is currently viewing the following course page. "
+                    "Ground your answer in this material when relevant:\n"
+                    + course_context
+                ),
+            })
         messages.extend(self.conversation_history)
 
         # Call ChatGPT with some max_tokens to control length (4)
