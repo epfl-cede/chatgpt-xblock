@@ -158,6 +158,7 @@ function ChatgptXBlock(runtime, element) {
       }
   });
 
-  // Focus the input on load so the student can type right away
-  questionInput.focus();
+  // Deliberately NO focus() on load: in the learning MFE the block renders
+  // inside an auto-height iframe, and focusing before the iframe has been
+  // resized scrolls the iframe document away from the top (TNL-7094).
 }

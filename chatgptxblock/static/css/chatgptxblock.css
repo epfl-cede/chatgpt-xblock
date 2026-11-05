@@ -1,10 +1,12 @@
+/* NOTE: never size this block with viewport units (100vh etc.). In the
+   learning MFE the block renders inside an auto-height iframe whose height
+   chases the reported content height; a 100vh block would grow the iframe,
+   which grows 100vh again, ad infinitum (endless page + empty area). */
 .chatgpt {
   display: flex;
   flex-direction: column;
-  height: 100vh;
   box-sizing: border-box;
   padding: 10px 0 20px 0;
-  overflow: hidden;
 }
 
 .chatgpt__disclaimer {
@@ -18,8 +20,6 @@
 .chatgpt__question {
   display: flex;
   flex-direction: column;
-  flex: 1;
-  min-height: 0;
   margin-bottom: 20px;
 }
 
@@ -28,10 +28,9 @@
   margin-bottom: 10px;
 }
 
-/* --- Conversation transcript: takes all remaining vertical space --- */
+/* --- Conversation transcript: fixed height, scrolls internally --- */
 .chatgpt__messages {
-  flex: 1;
-  min-height: 120px;
+  height: 480px;
   overflow-y: auto;
   border: 1px solid #ddd;
   border-radius: 6px;
