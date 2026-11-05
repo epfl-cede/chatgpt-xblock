@@ -28,6 +28,91 @@
   margin-bottom: 10px;
 }
 
+/* --- Toolbar: 'New conversation' + inline confirm --- */
+.chatgpt__toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+  min-height: 32px;
+}
+
+.chatgpt__new-btn {
+  padding: 5px 12px;
+  font-size: 13px;
+  background: none;
+  color: #4CAF50;
+  border: 1px solid #4CAF50;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.chatgpt__new-btn:hover:not(:disabled) {
+  background: #e8f5e9;
+}
+
+.chatgpt__new-btn:disabled {
+  color: #aaa;
+  border-color: #ccc;
+  cursor: not-allowed;
+}
+
+.chatgpt__confirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  background: #fff3cd;
+  border: 1px solid #ffeeba;
+  border-radius: 5px;
+  font-size: 14px;
+}
+
+/* The hidden attribute must win over display:flex (class rule beats the
+   HTML default [hidden] { display: none }). */
+.chatgpt__confirm[hidden] {
+  display: none;
+}
+
+.chatgpt__confirm-text {
+  flex: 1 1 auto;
+}
+
+.chatgpt__confirm-start,
+.chatgpt__confirm-cancel {
+  padding: 5px 12px;
+  font-size: 13px;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.chatgpt__confirm-start {
+  background: #4CAF50;
+  color: #fff;
+  border: none;
+}
+
+.chatgpt__confirm-start:hover:not(:disabled) {
+  background: #3e8e41;
+}
+
+.chatgpt__confirm-start:disabled {
+  background: #cccccc;
+  cursor: not-allowed;
+}
+
+.chatgpt__confirm-cancel {
+  background: none;
+  color: #555;
+  border: 1px solid #bbb;
+}
+
+.chatgpt__confirm-cancel:hover:not(:disabled) {
+  background: #eee;
+}
+
 /* --- Conversation transcript: fixed height, scrolls internally --- */
 .chatgpt__messages {
   height: 480px;

@@ -644,6 +644,16 @@ class ChatgptXBlock(StudioEditableXBlockMixin, XBlock):
         return {"messages": self.conversation_history}
 
     @XBlock.json_handler
+    def reset_conversation(self, data, suffix=""):
+        """
+        Start a new conversation: clear the stored transcript server-side, so
+        the model no longer sees the previous exchanges. Explicit user action,
+        non-recoverable.
+        """
+        self.conversation_history = []
+        return {"status": "ok"}
+
+    @XBlock.json_handler
     def submit_reflection(self, data, suffix=""):
         """
         Optional: Store learner reflections (6) for additional analytics or feedback.

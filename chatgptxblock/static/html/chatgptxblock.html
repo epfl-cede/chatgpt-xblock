@@ -6,6 +6,22 @@
     <!-- Description heading, only rendered when the course team set one -->
     {description_html}
 
+    <!-- Toolbar: start a new conversation (hidden while the confirm bar shows) -->
+    <div class="chatgpt__toolbar">
+      <button type="button" id="new-conversation-btn" class="chatgpt__new-btn" disabled>
+        + New conversation
+      </button>
+    </div>
+
+    <!-- Inline confirmation shown when the student clicks 'New conversation' -->
+    <div id="new-conversation-confirm" class="chatgpt__confirm" hidden>
+      <span class="chatgpt__confirm-text">
+        Start a new conversation? The current chat will be deleted.
+      </span>
+      <button type="button" id="confirm-reset-btn" class="chatgpt__confirm-start">Start new conversation</button>
+      <button type="button" id="cancel-reset-btn" class="chatgpt__confirm-cancel">Cancel</button>
+    </div>
+
     <!-- Conversation transcript (newest messages at the bottom, like a chat) -->
     <div id="chat-messages" class="chatgpt__messages" aria-live="polite"></div>
 

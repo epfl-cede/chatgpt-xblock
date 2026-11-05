@@ -6,10 +6,15 @@ function ChatgptXBlock(runtime, element) {
   var submitBtn = $('#submit-btn', element);
   var chatMessages = $('#chat-messages', element);
   var errorMessage = $('#error-message', element);
+  var newConversationBtn = $('#new-conversation-btn', element);
+  var newConversationConfirm = $('#new-conversation-confirm', element);
+  var confirmResetBtn = $('#confirm-reset-btn', element);
+  var cancelResetBtn = $('#cancel-reset-btn', element);
 
   // Handler URLs
   var getAnswerUrl = runtime.handlerUrl(element, 'get_answer');
   var getConversationUrl = runtime.handlerUrl(element, 'get_conversation');
+  var resetConversationUrl = runtime.handlerUrl(element, 'reset_conversation');
 
   // (8) Helper function to show errors in the UI
   function showError(msg) {
@@ -23,6 +28,7 @@ function ChatgptXBlock(runtime, element) {
   }
   questionInput.on('input', updateSubmitState);
   updateSubmitState();
+  updateNewConversationState();
 
   // Auto-grow the textarea while typing (capped by CSS max-height),
   // reset after each send.
@@ -51,6 +57,21 @@ function ChatgptXBlock(runtime, element) {
       chatMessages.scrollTop(chatMessages[0].scrollHeight);
   }
 
+  // Render the empty-state placeholder in an empty transcript
+  function showEmptyState() {
+      chatMessages.append(
+          $('<div></div>')
+              .addClass('chatgpt__message chatgpt__message--empty')
+              .text('No messages yet. Ask your first question below.')
+      );
+  }
+
+  // 'New conversation' is only meaningful (and only offered) once a history exists
+  function updateNewConversationState() {
+      var hasHistory = chatMessages.children('.chatgpt__message--user').length > 0;
+      newConversationBtn.prop('disabled', !hasHistory || awaitingAnswer);
+  }
+
   // (2) Submit question for conversation (button click, Enter key, or form submit)
   var awaitingAnswer = false;
   function askQuestion() {
@@ -64,6 +85,9 @@ function ChatgptXBlock(runtime, element) {
       }
       awaitingAnswer = true;
       submitBtn.prop('disabled', true);
+      // Close a pending 'New conversation' confirm: the sent question belongs
+      // to the current conversation, and a stale Start button would wipe it.
+      showConfirmBar(false);
 
       // Show the student's message immediately, then a loading bubble.
       showError('');
@@ -116,10 +140,56 @@ function ChatgptXBlock(runtime, element) {
           },
           complete: function() {
               awaitingAnswer = false;
+              updateNewConversationState();
               questionInput.focus();
           }
       });
   }
+
+  // --- New conversation ---
+  // The transcript stays until the student confirms; then the server clears
+  // conversation_history and the UI resets to the empty state.
+  function showConfirmBar(show) {
+      newConversationConfirm.prop('hidden', !show);
+      newConversationBtn.prop('hidden', show);
+  }
+
+  newConversationBtn.on('click', function () {
+      showConfirmBar(true);
+  });
+
+  cancelResetBtn.on('click', function () {
+      showConfirmBar(false);
+  });
+
+  confirmResetBtn.on('click', function () {
+      if (awaitingAnswer) {
+          return;
+      }
+      confirmResetBtn.prop('disabled', true);
+      $.ajax({
+          type: "POST",
+          url: resetConversationUrl,
+          data: JSON.stringify({}),
+          timeout: 15000,
+          success: function (response) {
+              showConfirmBar(false);
+              if (response.status === 'ok') {
+                  chatMessages.empty();
+                  showEmptyState();
+                  updateNewConversationState();
+              } else {
+                  showError('Could not start a new conversation. Please try again.');
+              }
+          },
+          error: function () {
+              showError('Could not start a new conversation. Please try again.');
+          },
+          complete: function () {
+              confirmResetBtn.prop('disabled', false);
+          }
+      });
+  });
 
   // Load the existing session transcript on page load
   $.ajax({
@@ -132,12 +202,9 @@ function ChatgptXBlock(runtime, element) {
               appendMessage(message.role, message.content);
           });
           if (!(response.messages || []).length) {
-              chatMessages.append(
-                  $('<div></div>')
-                      .addClass('chatgpt__message chatgpt__message--empty')
-                      .text('No messages yet. Ask your first question below.')
-              );
+              showEmptyState();
           }
+          updateNewConversationState();
       },
       error: function() {
           showError('Could not load the conversation history. Please reload the page.');
