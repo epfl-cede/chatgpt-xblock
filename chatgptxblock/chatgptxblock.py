@@ -80,16 +80,21 @@ class ChatgptXBlock(StudioEditableXBlockMixin, XBlock):
         Collect the course context around this unit: course/section/subsection
         titles plus the text of sibling components in the same vertical, so the
         model can ground its answers in the material the student is looking at.
-        Returns a string or None if the runtime doesn't allow course access
+        Returns a string; a short placeholder if no context is available
         (e.g. workbench, library content, studio preview edge cases).
         """
         try:
             from xmodule.modulestore.django import modulestore
 
             store = modulestore()
-            course_key = getattr(self.runtime, "course_id", None)
+            # context_key covers both old (BlockUsageLocator) and new (UsageKeyV2)
+            # runtimes; plain xblock.core.XBlock has no `category` attribute - the
+            # block type lives on scope_ids.
+            course_key = getattr(self.scope_ids.usage_id, "context_key", None)
             if course_key is None:
-                return None
+                course_key = getattr(self.runtime, "course_id", None)
+            if course_key is None:
+                return "(No surrounding course page could be determined.)"
 
             # Walk up the parent chain: vertical -> sequential -> chapter -> course
             location = self.scope_ids.usage_id
@@ -102,7 +107,7 @@ class ChatgptXBlock(StudioEditableXBlockMixin, XBlock):
                 ancestors.append(parent)
                 location = parent_loc
             if not ancestors:
-                return None
+                return "(No surrounding course page could be determined.)"
 
             vertical = ancestors[0]
             subsection = ancestors[1].display_name if len(ancestors) > 1 else None
@@ -122,11 +127,11 @@ class ChatgptXBlock(StudioEditableXBlockMixin, XBlock):
             remaining = max_chars
             for child_id in vertical.get_children():
                 child = store.get_item(child_id)
-                if getattr(child, "category", None) == self.category:
+                if getattr(child, "category", None) == self.scope_ids.block_type:
                     continue  # don't include this xblock itself
                 name = clean(getattr(child, "display_name", "") or "", 120)
                 body = ""
-                if child.category in ("html", "problem", "video"):
+                if remaining > 0 and child.category in ("html", "problem", "video"):
                     body = clean(getattr(child, "data", "") or "", remaining)
                 if name or body:
                     part = name + (": " + body if body else "")
@@ -143,8 +148,8 @@ class ChatgptXBlock(StudioEditableXBlockMixin, XBlock):
             if siblings:
                 parts.append("Content on the current page:\n" + "\n".join(siblings))
             return "\n".join(parts)
-        except Exception:
-            return None
+        except Exception as exc:
+            return f"(No surrounding course page could be determined: {type(exc).__name__}: {exc})"
 
     def student_view(self, context=None):
         """
