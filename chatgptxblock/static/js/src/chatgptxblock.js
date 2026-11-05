@@ -81,21 +81,41 @@ function ChatgptXBlock(runtime, element) {
           type: "POST",
           url: getAnswerUrl,
           data: JSON.stringify({ question: question }),
+          // 15s client-side timeout: matches the server-side OpenAI timeout.
+          // jQuery aborts (kills) the request when it fires; the student can
+          // then simply submit the question again.
+          timeout: 15000,
           success: function(response) {
               loadingBubble.remove();
-              if (response.answer) {
+              if (response.error) {
+                  // Server-side graceful failure (timeout, auth, rate limit...).
+                  // The question bubble stays visible so it can be re-sent.
+                  showError(response.error);
+                  questionInput.val(question);
+                  resizeQuestionInput();
+                  updateSubmitState();
+              } else if (response.answer) {
                   appendMessage('assistant', response.answer);
               } else {
-                  showError('No answer received.');
+                  showError('No answer received. Please try again.');
               }
           },
-          error: function() {
+          error: function(xhr, textStatus) {
               loadingBubble.remove();
-              showError('Error sending question to server.');
+              if (textStatus === 'timeout') {
+                  showError('The request timed out after 15 seconds and was cancelled. Please try again.');
+              } else if (textStatus === 'abort') {
+                  showError('The request was cancelled. Please try again.');
+              } else {
+                  showError('Error sending question to server. Please try again.');
+              }
+              // Restore the question so the student can repeat it.
+              questionInput.val(question);
+              resizeQuestionInput();
+              updateSubmitState();
           },
           complete: function() {
               awaitingAnswer = false;
-              updateSubmitState();
               questionInput.focus();
           }
       });
@@ -106,6 +126,7 @@ function ChatgptXBlock(runtime, element) {
       type: "POST",
       url: getConversationUrl,
       data: JSON.stringify({}),
+      timeout: 15000,
       success: function(response) {
           (response.messages || []).forEach(function (message) {
               appendMessage(message.role, message.content);
@@ -117,6 +138,9 @@ function ChatgptXBlock(runtime, element) {
                       .text('No messages yet. Ask your first question below.')
               );
           }
+      },
+      error: function() {
+          showError('Could not load the conversation history. Please reload the page.');
       }
   });
 

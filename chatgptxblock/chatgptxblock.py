@@ -1,7 +1,13 @@
 import re
 
 import pkg_resources
-from openai import AuthenticationError, OpenAI
+from openai import (
+    APIConnectionError,
+    APITimeoutError,
+    AuthenticationError,
+    OpenAI,
+    RateLimitError,
+)
 from xblock.core import XBlock
 from xblock.fields import Float, Integer, List, Scope, String
 from xblock.fragment import Fragment
@@ -187,7 +193,10 @@ class ChatgptXBlock(StudioEditableXBlockMixin, XBlock):
         """
         api_key = self.api_key
         try:
-            client = OpenAI(api_key=api_key)
+            # Hard 15s timeout: a hung endpoint must never block a request
+            # thread indefinitely. No automatic retries - the student repeats
+            # the question themselves via the UI.
+            client = OpenAI(api_key=api_key, timeout=15.0, max_retries=0)
             return client
         except Exception:
             # Handle the exception as appropriate for your application
@@ -198,14 +207,27 @@ class ChatgptXBlock(StudioEditableXBlockMixin, XBlock):
         """
         Handle the submission of the user's question and return an answer,
         including guardrails such as moderation and error handling.
+        Never raises: any unexpected failure is returned as a graceful
+        {"error": ...} payload the UI can show, with the request repeatable.
         """
+        try:
+            return self._get_answer(data)
+        except Exception as e:
+            return {
+                "error": (
+                    "Something went wrong while contacting the AI service. "
+                    "Please try again. ({}: {})".format(type(e).__name__, e)
+                )
+            }
+
+    def _get_answer(self, data):
         question = data.get("question", "").strip()
         if not question:
             return {"answer": "Please enter a question."}
 
         # Set the OpenAI API key (4 & 8: we handle errors in a try block)
         client = self.get_openai_client()
-        if client is None:
+        if not isinstance(client, OpenAI):
             return {
                 "error": "Unable to initialize OpenAI client. Please check configuration."
             }
@@ -221,19 +243,21 @@ class ChatgptXBlock(StudioEditableXBlockMixin, XBlock):
                 }
         except AuthenticationError:
             return {
-                "answer": "Authentication error. Please check your API key in studio setting."
+                "error": "Authentication error. Please check your API key in studio setting."
             }
         except Exception:
             pass
 
         # 2. Provide a conversation-like experience:
-        # Add user's question to conversation history
-        self.conversation_history.append({"role": "user", "content": question})
-
         # Limit the conversation to the last few messages (avoid excessive token usage)
         # Keep 6 messages max (3 user+3 assistant) plus a system prompt. Adjust as desired.
         if len(self.conversation_history) > 6:
             self.conversation_history.pop(0)
+
+        # The pending question is passed to the model but NOT yet persisted in
+        # conversation_history: if the request fails or times out, the history
+        # stays clean so the student can simply repeat the question.
+        pending_history = self.conversation_history + [{"role": "user", "content": question}]
 
         # Prepare messages: system prompt, optional course context, then the
         # conversation so far.
@@ -250,14 +274,16 @@ class ChatgptXBlock(StudioEditableXBlockMixin, XBlock):
                     ),
                 }
             )
-        messages.extend(self.conversation_history)
+        messages.extend(pending_history)
 
         if not (self.model_name or "").strip():
             return {
                 "answer": "No model configured. Please set the model name in the component settings."
             }
 
-        # Call ChatGPT with some max_tokens to control length (4)
+        # Call ChatGPT with some max_tokens to control length (4).
+        # All failures return a user-friendly "error" message without touching
+        # conversation_history, so the student can repeat the question.
         try:
             response = client.chat.completions.create(
                 model=self.model_name,
@@ -265,22 +291,50 @@ class ChatgptXBlock(StudioEditableXBlockMixin, XBlock):
                 max_tokens=self.max_tokens,  # limit the size of the response
                 temperature=self.temperature,  # slightly creative, but not too random
             )
+        except APITimeoutError:
+            return {
+                "error": (
+                    "The AI service did not respond within 15 seconds. "
+                    "Please try again."
+                )
+            }
+        except APIConnectionError:
+            return {
+                "error": (
+                    "Could not reach the AI service. Please check your "
+                    "connection and try again."
+                )
+            }
+        except RateLimitError:
+            return {
+                "error": (
+                    "The AI service is receiving too many requests right now. "
+                    "Please wait a moment and try again."
+                )
+            }
         except AuthenticationError:
             return {
-                "answer": "Authentication error. Please check your API key in studio setting."
+                "error": "Authentication error. Please check your API key in studio setting."
             }
         except Exception as e:
             # 8. Fallback or error handling
-            return {"answer": f"OpenAI API error: {str(e)}"}
+            return {"error": "AI service error: {}".format(str(e))}
 
         if not response.choices:
-            return {"answer": "No response received from the model."}
+            return {"error": "No response received from the model. Please try again."}
 
-        content = response.choices[0].message.content.strip()
+        content = response.choices[0].message.content.strip() if (
+            response.choices[0].message.content
+        ) else ""
         if not content:
-            content = "Sorry, I couldn't generate a response. Please try again."
+            return {
+                "error": (
+                    "Sorry, the model returned an empty response. Please try again."
+                )
+            }
 
-        # Add assistant's answer to the conversation
+        # Success only now: persist the question and answer in the conversation
+        self.conversation_history.append({"role": "user", "content": question})
         self.conversation_history.append({"role": "assistant", "content": content})
 
         return {"answer": content}
