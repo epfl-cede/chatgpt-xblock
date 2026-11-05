@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ChatgptXBlock - sandbox preview</title>
+
+  <!-- Real block CSS, straight from the source tree -->
+  <link rel="stylesheet" href="../chatgptxblock/static/css/chatgptxblock.css">
+
+  <style>
+    /* Sandbox chrome only, not part of the block */
+    body {
+      font-family: "Open Sans", "Segoe UI", sans-serif;
+      background: #f6f6f6;
+      margin: 0;
+      padding: 30px;
+    }
+    .sandbox-note {
+      max-width: 800px;
+      margin: 0 auto 20px auto;
+      background: #e8f0fe;
+      border: 1px solid #b9cbee;
+      border-radius: 6px;
+      padding: 10px 14px;
+      font-size: 14px;
+      color: #333;
+      flex: none;
+    }
+    .sandbox-note code { background: #dde7f8; padding: 1px 4px; border-radius: 3px; }
+    .xblock-host {
+      max-width: 800px;
+      width: 100%;
+      margin: 0 auto;
+      background: #fff;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      padding: 25px;
+      box-sizing: border-box;
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+    }
+    /* Sandbox override: block fills the host box instead of the viewport,
+       so the sandbox chrome above does not push it off-screen. */
+    .xblock-host .chatgpt {
+      flex: 1;
+      min-height: 0;
+    }
+    body {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      box-sizing: border-box;
+      overflow: hidden;
+    }
+  </style>
+
+  <!-- jQuery from CDN (in the real LMS the platform provides it) -->
+  <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+
+  <!-- Real vendor libs used by the block -->
+  <script src="../chatgptxblock/static/js/vendor/marked.min.js"></script>
+  <script src="../chatgptxblock/static/js/vendor/purify.min.js"></script>
+</head>
+<body>
+
+  <div class="sandbox-note">
+    <strong>Sandbox preview.</strong> Real HTML/CSS/JS from
+    <code>chatgptxblock/static/</code>, with the <code>get_answer</code> /
+    <code>get_conversation</code> / <code>reset_conversation</code> handlers
+    mocked (no OpenAI call).
+    Enter sends, Shift+Enter inserts a newline.
+  </div>
+
+  <div class="xblock-host" id="xblock-host"></div>
+  <div style="max-width:800px;margin:8px auto 0 auto;font-size:12px;color:#888;flex:none;">
+    Sandbox only: the block fills the white box; in the LMS the transcript
+    is a fixed-height scrolling area.
+  </div>
+
+  <script>
+  // ---- Mock runtime + handlers (sandbox only) -------------------------
+  function MockRuntime() {}
+  MockRuntime.prototype.handlerUrl = function (element, handlerName) {
+    return 'mock://' + handlerName;
+  };
+
+  var CANNED_ANSWERS = [
+    "## Canned answer\n\nThis is a **mocked** response from the sandbox.\n\n- Enter sent the question\n- `Shift+Enter` inserted a newline before sending\n- Markdown is rendered via the real `marked` + `DOMPurify` libs\n\n```python\nprint('Hello from the mock handler')\n```",
+    "Second canned answer, to prove conversation-style repeats work. It even has a [link](https://example.com) and a ~~strikethrough~~."
+  ];
+  var cannedIndex = 0;
+
+  // Seed a fake prior session so the transcript is visible on load.
+  // Set to [] to start with an empty conversation.
+  // Set to [] to test the empty-state placeholder + first-question flow.
+  window.SANDBOX_SEED_HISTORY = [
+    { role: 'user', content: 'What is a zeta function?' },
+    { role: 'assistant', content: 'Short seeded answer from a *previous session*: the zeta function is ...' }
+  ];
+
+  var realAjax = $.ajax;
+  $.ajax = function (options) {
+    function finish(response, delay) {
+      setTimeout(function () {
+        if (options.success) options.success(response);
+        if (options.complete) options.complete();
+      }, delay);
+    }
+    if (options.url === 'mock://get_answer') {
+      var data = JSON.parse(options.data);
+      if (!data.question || !data.question.trim()) {
+        finish({ answer: '' }, 400);
+      } else {
+        finish({ answer: CANNED_ANSWERS[cannedIndex++ % CANNED_ANSWERS.length] }, 400);
+      }
+      return;
+    }
+    if (options.url === 'mock://get_conversation') {
+      // Pretend a prior session happened (in production this comes from
+      // the XBlock's Scope.user_state conversation_history field).
+      finish({ messages: window.SANDBOX_SEED_HISTORY || [] }, 100);
+      return;
+    }
+    if (options.url === 'mock://reset_conversation') {
+      // Mirror the server-side handler: clear the stored history, so a page
+      // reload also comes back empty (like Scope.user_state would).
+      window.SANDBOX_SEED_HISTORY = [];
+      finish({ status: 'ok' }, 200);
+      return;
+    }
+    if (options.url === 'mock://submit_reflection') {
+      finish({ status: 'success', message: 'Reflection submitted successfully.' }, 200);
+      return;
+    }
+    return realAjax.apply($, arguments);
+  };
+
+  // ---- Assemble the block: real HTML template + substitutions ---------
+  $(function () {
+    $.get('../chatgptxblock/static/html/chatgptxblock.html').done(function (template) {
+      // Mirror chatgptxblock.py student_view(): fill format placeholders
+      // (description left empty -> heading hidden, same as the empty default)
+      var html = template
+        .replace('{description_html}', '')
+        .replace('{disclaimer}',
+          '<div class="chatgpt__disclaimer">\n' +
+          '  <strong>Disclaimer:</strong> Responses are generated by an AI model.\n' +
+          '  They might not always be accurate. Please verify with official course materials.\n' +
+          '  To help it answer, the content of the current course page (titles and\n' +
+          '  text of the components you are viewing) is automatically added to the\n' +
+          '  AI&apos;s instructions (system prompt).\n' +
+          '</div>');
+
+      var host = $('#xblock-host');
+      host.html(html);
+
+      // Load the REAL block JS against the mock runtime
+      $.getScript('../chatgptxblock/static/js/src/chatgptxblock.js')
+        .done(function () { ChatgptXBlock(new MockRuntime(), host[0]); })
+        .fail(function () { alert('Failed to load chatgptxblock.js'); });
+    });
+  });
+  </script>
+</body>
+</html>
