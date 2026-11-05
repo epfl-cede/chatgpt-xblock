@@ -4,7 +4,10 @@
 
   <div class="chatgpt__question">
     <h3 class="chatgpt__description">{self.description}</h3>
-    <br>
+
+    <!-- Conversation transcript (newest messages at the bottom, like a chat) -->
+    <div id="chat-messages" class="chatgpt__messages" aria-live="polite"></div>
+
     <form id="question-form">
       <textarea id="question-input" rows="2" placeholder="Type your question here... (Enter to send, Shift+Enter for a new line)"></textarea>
       <button type="submit" id="submit-btn">Submit</button>
@@ -13,13 +16,8 @@
   </div>
 
   <div class="chatgpt__answer">
-    <br>
-    <h3>Answer:</h3>
-    <p id="answer-text"></p>
     <!-- Basic error or status message area -->
     <p id="error-message" style="color: red;"></p>
   </div>
 
-  <!-- (6) Reflection area inserted from Python code -->
-  {reflection}
 </div>
