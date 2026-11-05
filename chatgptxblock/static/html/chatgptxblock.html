@@ -3,7 +3,8 @@
   {disclaimer}
 
   <div class="chatgpt__question">
-    <h3 class="chatgpt__description">{self.description}</h3>
+    <!-- Description heading, only rendered when the course team set one -->
+    {description_html}
 
     <!-- Conversation transcript (newest messages at the bottom, like a chat) -->
     <div id="chat-messages" class="chatgpt__messages" aria-live="polite"></div>
