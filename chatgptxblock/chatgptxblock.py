@@ -1,4 +1,5 @@
 import re
+from datetime import datetime
 
 import pkg_resources
 from openai import (
@@ -9,9 +10,68 @@ from openai import (
     RateLimitError,
 )
 from xblock.core import XBlock
-from xblock.fields import Float, Integer, List, Scope, String
+from xblock.fields import Boolean, Float, Integer, List, Scope, String
 from xblock.fragment import Fragment
 from xblockutils.studio_editable import StudioEditableXBlockMixin
+
+
+# Hard caps for the course overview injected into the system prompt.
+COURSE_OVERVIEW_MAX_CHARS = 2500
+COURSE_OVERVIEW_ABOUT_ITEM_CHARS = 500
+COURSE_OVERVIEW_MAX_CHAPTERS = 30
+COURSE_OVERVIEW_MAX_SUBSECTIONS = 12
+# Django-cache TTLs for the rendered course overview. A full overview is
+# stable (dates/description change rarely; the syllabus walk is not free).
+# An EMPTY overview is usually a transient failure (modulestore hiccup), so
+# it is cached only briefly - enough to deduplicate a burst, short enough to
+# recover quickly instead of disabling the feature for an hour.
+COURSE_OVERVIEW_CACHE_TTL = 3600
+COURSE_OVERVIEW_EMPTY_CACHE_TTL = 60
+
+_CACHE_MISS = object()
+
+
+def _clean_html(text, limit):
+    """Strip script/style blocks and tags, squash whitespace, cap length."""
+    text = re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", text or "", flags=re.S | re.I)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    # A tag boundary before punctuation leaves 'Smith ,' - close the gap.
+    text = re.sub(r"\s+([,.!?;:])", r"\1", text)
+    return text[:limit]
+
+
+def _fmt_date(value):
+    """Format a (possibly None) datetime as e.g. '15 Sep 2026'; None otherwise."""
+    try:
+        return value.strftime("%d %b %Y")
+    except Exception:
+        return None
+
+
+def _is_default_start(value):
+    """
+    True if value is Open edX's 'no real start date' sentinel: CourseFields
+    sets start (and anything falling back to it) to 2030-01-01 when the course
+    team never picked a date. Wrong facts in the system prompt are the worst
+    failure mode, so the sentinel must never surface as 'Start: 01 Jan 2030'.
+    Compares tz-naive to survive aware/naive mixes.
+    """
+    if not isinstance(value, datetime):
+        return False
+    try:
+        from xmodule.course_module import DEFAULT_START_DATE
+    except Exception:
+        DEFAULT_START_DATE = datetime(2030, 1, 1)
+    value = value.replace(tzinfo=None) if value.tzinfo else value
+    if DEFAULT_START_DATE.tzinfo:
+        DEFAULT_START_DATE = DEFAULT_START_DATE.replace(tzinfo=None)
+    return value == DEFAULT_START_DATE
+
+
+def _clean_name(block):
+    """Cleaned, length-capped display_name of a course block."""
+    return _clean_html(getattr(block, "display_name", "") or "", 120)
 
 
 class ChatgptXBlock(StudioEditableXBlockMixin, XBlock):
@@ -75,6 +135,17 @@ class ChatgptXBlock(StudioEditableXBlockMixin, XBlock):
         help="System prompt to guide the AI's behavior.",
     )
 
+    include_course_overview = Boolean(
+        display_name="Include course overview",
+        default=True,
+        scope=Scope.settings,
+        help=(
+            "Automatically add general course information (name, dates, "
+            "description, instructors, course structure) to the AI's "
+            "system prompt, in addition to the current page content."
+        ),
+    )
+
     temperature = Float(default=0.5, scope=Scope.settings, help="Controls Randomness.")
     # Student-specific fields
     # This will store the conversation as a list of message dictionaries:
@@ -93,6 +164,7 @@ class ChatgptXBlock(StudioEditableXBlockMixin, XBlock):
         "base_url",
         "description",
         "context_text",
+        "include_course_overview",
         "max_tokens",
         "temperature",
     ]
@@ -110,19 +182,11 @@ class ChatgptXBlock(StudioEditableXBlockMixin, XBlock):
         Returns a string; a short placeholder if no context is available
         (e.g. workbench, library content, studio preview edge cases).
         """
+        store = self._modulestore()
+        course_key = self._resolve_course_key()
+        if course_key is None:
+            return "(No surrounding course page could be determined.)"
         try:
-            from xmodule.modulestore.django import modulestore
-
-            store = modulestore()
-            # context_key covers both old (BlockUsageLocator) and new (UsageKeyV2)
-            # runtimes; plain xblock.core.XBlock has no `category` attribute - the
-            # block type lives on scope_ids.
-            course_key = getattr(self.scope_ids.usage_id, "context_key", None)
-            if course_key is None:
-                course_key = getattr(self.runtime, "course_id", None)
-            if course_key is None:
-                return "(No surrounding course page could be determined.)"
-
             # Walk up the parent chain: vertical -> sequential -> chapter -> course
             location = self.scope_ids.usage_id
             ancestors = []
@@ -141,14 +205,6 @@ class ChatgptXBlock(StudioEditableXBlockMixin, XBlock):
             section = ancestors[2].display_name if len(ancestors) > 2 else None
             course_name = ancestors[-1].display_name
 
-            def clean(text, limit):
-                text = re.sub(
-                    r"<(script|style)[^>]*>.*?</\1>", " ", text or "", flags=re.S | re.I
-                )
-                text = re.sub(r"<[^>]+>", " ", text)
-                text = re.sub(r"\s+", " ", text).strip()
-                return text[:limit]
-
             # Text of the sibling components on the same page (the vertical)
             siblings = []
             remaining = max_chars
@@ -156,10 +212,10 @@ class ChatgptXBlock(StudioEditableXBlockMixin, XBlock):
                 child = store.get_item(child_id)
                 if getattr(child, "category", None) == self.scope_ids.block_type:
                     continue  # don't include this xblock itself
-                name = clean(getattr(child, "display_name", "") or "", 120)
+                name = _clean_name(child)
                 body = ""
                 if remaining > 0 and child.category in ("html", "problem", "video"):
-                    body = clean(getattr(child, "data", "") or "", remaining)
+                    body = _clean_html(getattr(child, "data", "") or "", remaining)
                 if name or body:
                     part = name + (": " + body if body else "")
                     siblings.append("- " + part)
@@ -178,6 +234,153 @@ class ChatgptXBlock(StudioEditableXBlockMixin, XBlock):
         except Exception as exc:
             return f"(No surrounding course page could be determined: {type(exc).__name__}: {exc})"
 
+    def _modulestore(self):
+        """Return the modulestore, or None outside the LMS/CMS (workbench)."""
+        try:
+            from xmodule.modulestore.django import modulestore
+
+            return modulestore()
+        except Exception:
+            return None
+
+    def _resolve_course_key(self):
+        """
+        Resolve the course key from the usage id (context_key covers both old
+        (BlockUsageLocator) and new (UsageKeyV2) runtimes) or the runtime.
+        Returns None when unavailable (workbench, library content, ...).
+        """
+        course_key = getattr(self.scope_ids.usage_id, "context_key", None)
+        if course_key is None:
+            course_key = getattr(self.runtime, "course_id", None)
+        return course_key
+
+    def _about_line(self, store, course_key, about_name, label):
+        """
+        '<Label>: <cleaned about-page item>' (e.g. 'Description: ...').
+        Empty string if the item is missing or anything goes wrong.
+        """
+        try:
+            item = store.get_item(course_key.make_usage_key("about", about_name))
+            text = _clean_html(getattr(item, "data", "") or "", COURSE_OVERVIEW_ABOUT_ITEM_CHARS)
+            return "{}: {}".format(label, text) if text else ""
+        except Exception:
+            return ""
+
+    def _course_overview_heading(self, course, course_key):
+        """'Course: <name> (<org> <code>, run <run>)', + ' (self-paced)' flag."""
+        name = _clean_html(getattr(course, "display_name", "") or "", 200)
+        heading = "Course: {} ({} {}, run {})".format(
+            name or "(unnamed)", course_key.org, course_key.course, course_key.run
+        )
+        if getattr(course, "self_paced", False):
+            heading += " (self-paced)"
+        return heading
+
+    def _course_dates(self, course):
+        """
+        'Dates: ...' line from the date fields that are actually set. The
+        2030-01-01 sentinel (unset start, or an enrollment date falling back
+        to it) is treated as unset and omitted - never printed as a fact.
+        """
+        date_parts = []
+        for label, value in (
+            ("Start", getattr(course, "start", None)),
+            ("End", getattr(course, "end", None)),
+            ("Enrollment start", getattr(course, "enrollment_start", None)),
+            ("Enrollment end", getattr(course, "enrollment_end", None)),
+        ):
+            if _is_default_start(value):
+                continue
+            formatted = _fmt_date(value)
+            if formatted:
+                date_parts.append("{}: {}".format(label, formatted))
+        return "Dates: " + "; ".join(date_parts) if date_parts else ""
+
+    def _course_structure(self, course):
+        """
+        'Course structure:' block: chapter titles, each followed by its
+        subsection titles, capped by COURSE_OVERVIEW_MAX_CHAPTERS and
+        COURSE_OVERVIEW_MAX_SUBSECTIONS. Empty string if nothing found.
+        """
+        structure = []
+        try:
+            for chapter in course.get_children():
+                chapter_name = _clean_name(chapter)
+                if chapter_name:
+                    subsections = []
+                    try:
+                        for sequential in chapter.get_children():
+                            sub_name = _clean_name(sequential)
+                            if sub_name:
+                                subsections.append(sub_name)
+                            if len(subsections) >= COURSE_OVERVIEW_MAX_SUBSECTIONS:
+                                break
+                    except Exception:
+                        pass
+                    line = "- " + chapter_name
+                    if subsections:
+                        line += ": " + "; ".join(subsections)
+                    structure.append(line)
+                if len(structure) >= COURSE_OVERVIEW_MAX_CHAPTERS:
+                    break
+        except Exception:
+            pass
+        return "Course structure:\n" + "\n".join(structure) if structure else ""
+
+    def _collect_course_overview(self, course_key, max_chars=COURSE_OVERVIEW_MAX_CHARS):
+        """
+        Collect course-level facts for the system prompt: name, org/run,
+        dates, description and instructors (from the course about pages) and
+        the course structure (chapter titles, each followed by its subsection
+        titles). Every piece is best-effort: missing data (no about page,
+        workbench run, ...) is simply omitted. Returns a string, possibly empty.
+        """
+        try:
+            store = self._modulestore()
+            if store is None or course_key is None:
+                return ""
+            course = store.get_course(course_key)
+
+            lines = [self._course_overview_heading(course, course_key)]
+            for part in (
+                self._course_dates(course),
+                self._about_line(store, course_key, "short_description", "Description"),
+                self._about_line(store, course_key, "instructor", "Instructors"),
+                self._course_structure(course),
+            ):
+                if part:
+                    lines.append(part)
+
+            return "\n".join(lines)[:max_chars]
+        except Exception:
+            # Overview is optional enrichment - never block a chat request.
+            return ""
+
+    def _course_overview_cached(self):
+        """
+        Rendered course overview, cached per course in the Django cache.
+        Empty renders are cached too (with a short TTL) so a course whose
+        overview fails to build does not re-run the syllabus walk on every
+        student question - but recovers within a minute. Falls back to a
+        direct (uncached) render when the cache layer is unavailable
+        (workbench, tests).
+        """
+        course_key = self._resolve_course_key()
+        if course_key is None:
+            return ""
+        cache_key = "chatgpt-xblock:course-overview:{}".format(course_key)
+        try:
+            from django.core.cache import cache as django_cache
+
+            overview = django_cache.get(cache_key, _CACHE_MISS)
+            if overview is _CACHE_MISS:
+                overview = self._collect_course_overview(course_key)
+                ttl = COURSE_OVERVIEW_CACHE_TTL if overview else COURSE_OVERVIEW_EMPTY_CACHE_TTL
+                django_cache.set(cache_key, overview, ttl)
+            return overview or ""
+        except Exception:
+            return self._collect_course_overview(course_key)
+
     def student_view(self, context=None):
         """
         The primary view of the ChatgptXBlock, shown to students.
@@ -190,9 +393,10 @@ class ChatgptXBlock(StudioEditableXBlockMixin, XBlock):
         <div class="chatgpt__disclaimer">
           <strong>Disclaimer:</strong> Responses are generated by an AI model.
           They might not always be accurate. Please verify with official course materials.
-          To help it answer, the content of the current course page (titles and
-          text of the components you are viewing) is automatically added to the
-          AI's instructions (system prompt).
+          To help it answer, general course information (name, dates, description,
+          instructors, structure) and the content of the current course page
+          (titles and text of the components you are viewing) are automatically
+          added to the AI's instructions (system prompt).
         </div>
         """
 
@@ -274,6 +478,41 @@ class ChatgptXBlock(StudioEditableXBlockMixin, XBlock):
             # Handle the exception as appropriate for your application
             return {"error": "Failed to initialize OpenAI client"}
 
+    def _build_messages(self, question):
+        """
+        Assemble the chat messages: system prompt, course overview (dates,
+        description, instructors, structure - if the toggle is on), the
+        current page context, then the conversation so far with the pending
+        question appended (not yet persisted in conversation_history).
+        """
+        messages = [{"role": "system", "content": self.context_text}]
+        if self.include_course_overview:
+            overview = self._course_overview_cached()
+            if overview:
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            "General information about this course:\n" + overview
+                        ),
+                    }
+                )
+        course_context = self._collect_course_context()
+        if course_context:
+            messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        "The student is currently viewing the following course page. "
+                        "Ground your answer in this material when relevant:\n"
+                        + course_context
+                    ),
+                }
+            )
+        messages.extend(self.conversation_history)
+        messages.append({"role": "user", "content": question})
+        return messages
+
     @XBlock.json_handler
     def get_answer(self, data, suffix=""):
         """
@@ -331,24 +570,7 @@ class ChatgptXBlock(StudioEditableXBlockMixin, XBlock):
         # The pending question is passed to the model but NOT yet persisted in
         # conversation_history: if the request fails or times out, the history
         # stays clean so the student can simply repeat the question.
-        pending_history = self.conversation_history + [{"role": "user", "content": question}]
-
-        # Prepare messages: system prompt, optional course context, then the
-        # conversation so far.
-        messages = [{"role": "system", "content": self.context_text}]
-        course_context = self._collect_course_context()
-        if course_context:
-            messages.append(
-                {
-                    "role": "system",
-                    "content": (
-                        "The student is currently viewing the following course page. "
-                        "Ground your answer in this material when relevant:\n"
-                        + course_context
-                    ),
-                }
-            )
-        messages.extend(pending_history)
+        messages = self._build_messages(question)
 
         if not (self.model_name or "").strip():
             return {

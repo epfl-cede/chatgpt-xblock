@@ -66,6 +66,7 @@ You can customize the following fields directly from the Studio interface:
 -   **`base_url`**: Base URL of an OpenAI-compatible API endpoint (e.g. `https://gateway.example.com/v1`) so each unit can point at its own AI backend. Two layers only: the unit's Studio value wins; if empty, the SiteConfiguration key `CHATGPT_XBLOCK_BASE_URL` (per-tenant default, set in Django admin) is used. If neither is set, the unit is unconfigured and student questions are rejected with a clear error - there is no fallback to the public OpenAI API.
 -   **`description`**: A short description of the assistant for students.
 -   **`context_text`**: Context that guides the assistant's responses to align with your course content.
+-   **`include_course_overview`**: When enabled (default), general course information - name, dates, description, instructors and the course structure (chapter and subsection titles) - is automatically added to the AI's system prompt, together with the content of the current course page. Instructors' names come from the public course about page, so no new information is disclosed to students.
 
 
 ## **Reflection and Moderation**
