@@ -19,10 +19,17 @@
   margin-bottom: 10px;
 }
 
-.chatgpt__question input {
+.chatgpt__question form {
+  margin: 0;
+}
+
+.chatgpt__question textarea {
   width: 100%;
   padding: 10px;
   font-size: 16px;
+  resize: vertical;
+  font-family: inherit;
+  box-sizing: border-box;
 }
 
 .chatgpt__question button {

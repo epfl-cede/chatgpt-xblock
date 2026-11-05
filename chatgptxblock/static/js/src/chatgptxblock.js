@@ -2,6 +2,7 @@
 function ChatgptXBlock(runtime, element) {
   // Get elements
   var questionInput = $('#question-input', element);
+  var questionForm = $('#question-form', element);
   var submitBtn = $('#submit-btn', element);
   var answerText = $('#answer-text', element);
   var errorMessage = $('#error-message',element);
@@ -19,10 +20,10 @@ function ChatgptXBlock(runtime, element) {
       errorMessage.textContent = msg;
   }
 
-  // (2) Submit question for conversation
-  submitBtn.click(function (eventObject) {
+  // (2) Submit question for conversation (button click, Enter key, or form submit)
+  function askQuestion() {
       var question = questionInput.val();
-      if (!question) {
+      if (!question || !question.trim()) {
           showError('Please enter a question.');
           return;
       }
@@ -47,6 +48,20 @@ function ChatgptXBlock(runtime, element) {
               showError('Error sending question to server.');
           }
       });
+  }
+
+  // Form submit: fires on button click and on Enter inside the textarea
+  questionForm.submit(function (event) {
+      event.preventDefault();
+      askQuestion();
+  });
+
+  // Enter sends the question, Shift+Enter inserts a new line
+  questionInput.keydown(function (event) {
+      if (event.key === 'Enter' && !event.shiftKey) {
+          event.preventDefault();
+          askQuestion();
+      }
   });
 
   // (6) Submit reflection
