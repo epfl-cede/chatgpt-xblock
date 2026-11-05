@@ -63,6 +63,7 @@ You can customize the following fields directly from the Studio interface:
 -   **`display_name`**: Display name for the ChatGPT Assistant module.
 -   **`model_name`**: Select the desired ChatGPT model (e.g., GPT-3.5 Turbo, GPT-4).
 -   **`api_key`**: Your OpenAI API key, which can be generated at [OpenAI API Keys](https://platform.openai.com/account/api-keys).
+-   **`base_url`**: Base URL of an OpenAI-compatible API endpoint (e.g. `https://gateway.example.com/v1`) so each unit can point at its own AI backend. Two layers only: the unit's Studio value wins; if empty, the SiteConfiguration key `CHATGPT_XBLOCK_BASE_URL` (per-tenant default, set in Django admin) is used. If neither is set, the unit is unconfigured and student questions are rejected with a clear error - there is no fallback to the public OpenAI API.
 -   **`description`**: A short description of the assistant for students.
 -   **`context_text`**: Context that guides the assistant's responses to align with your course content.
 

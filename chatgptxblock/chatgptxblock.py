@@ -38,6 +38,20 @@ class ChatgptXBlock(StudioEditableXBlockMixin, XBlock):
         scope=Scope.settings,
         help="API key for the OpenAI-compatible endpoint",
     )
+    base_url = String(
+        display_name="API base URL",
+        # Resolved per-request by _resolve_base_url(): Studio value wins, then
+        # SiteConfiguration (CHATGPT_XBLOCK_BASE_URL key). If the site
+        # configuration has no default, this field is mandatory - questions
+        # are rejected otherwise rather than hitting the public OpenAI API.
+        default="",
+        scope=Scope.settings,
+        help=(
+            "Base URL of an OpenAI-compatible API endpoint (e.g. "
+            "https://gateway.example.com/v1). Required unless the platform "
+            "admin has set CHATGPT_XBLOCK_BASE_URL in the site configuration."
+        ),
+    )
     description = String(
         default="Description here", scope=Scope.settings, help="Description"
     )
@@ -70,6 +84,7 @@ class ChatgptXBlock(StudioEditableXBlockMixin, XBlock):
         "display_name",
         "model_name",
         "api_key",
+        "base_url",
         "description",
         "context_text",
         "max_tokens",
@@ -187,16 +202,55 @@ class ChatgptXBlock(StudioEditableXBlockMixin, XBlock):
         frag.initialize_js("ChatgptXBlock")
         return frag
 
+    def _resolve_base_url(self):
+        """
+        Resolve the AI endpoint base URL. Two layers, nothing more:
+        1. Per-unit Studio setting (self.base_url) - course-team override.
+        2. SiteConfiguration JSON, key CHATGPT_XBLOCK_BASE_URL - the per-tenant
+           default (DB-backed, read at request time, so each Django Site can
+           point at its own gateway).
+        Returns a non-empty URL string or None. None means unconfigured: when
+        the platform default is absent, the per-unit value is mandatory - the
+        block must never silently fall back to the public OpenAI API.
+        """
+        url = (self.base_url or "").strip()
+        if url:
+            return url
+        try:
+            # LMS/CMS-only import: unavailable in the workbench, so fail soft.
+            from openedx.core.djangoapps.site_configuration.helpers import get_value
+
+            # String default selects get_value's raw-value fast path.
+            url = (get_value("CHATGPT_XBLOCK_BASE_URL", "") or "").strip()
+        except Exception:
+            url = ""
+        return url or None
+
     def get_openai_client(self):
         """
-        Initialize and return an OpenAI client using the API key stored in the XBlock settings.
+        Initialize and return an OpenAI client using the API key stored in the
+        XBlock settings and the base URL resolved from Studio or
+        SiteConfiguration.
         """
         api_key = self.api_key
+        base_url = self._resolve_base_url()
+        if not base_url:
+            # Mandatory: with no SiteConfiguration default, the unit must set
+            # its own endpoint - never fall back to the public OpenAI API.
+            return {
+                "error": (
+                    "No AI endpoint configured. Set the API base URL in the "
+                    "component settings (or ask the platform admin to set "
+                    "CHATGPT_XBLOCK_BASE_URL in the site configuration)."
+                )
+            }
         try:
             # Hard 15s timeout: a hung endpoint must never block a request
             # thread indefinitely. No automatic retries - the student repeats
             # the question themselves via the UI.
-            client = OpenAI(api_key=api_key, timeout=15.0, max_retries=0)
+            client = OpenAI(
+                api_key=api_key, base_url=base_url, timeout=15.0, max_retries=0
+            )
             return client
         except Exception:
             # Handle the exception as appropriate for your application
@@ -225,7 +279,9 @@ class ChatgptXBlock(StudioEditableXBlockMixin, XBlock):
         if not question:
             return {"answer": "Please enter a question."}
 
-        # Set the OpenAI API key (4 & 8: we handle errors in a try block)
+        # Endpoint must be resolved (unit setting or SiteConfiguration) before
+        # anything is sent anywhere; get_openai_client refuses to build a
+        # client against the public OpenAI default.
         client = self.get_openai_client()
         if not isinstance(client, OpenAI):
             return {
