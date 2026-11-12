@@ -14,7 +14,6 @@ from xblock.fields import Boolean, Float, Integer, List, Scope, String
 from xblock.fragment import Fragment
 from xblockutils.studio_editable import StudioEditableXBlockMixin
 
-
 # Hard caps for the course overview injected into the system prompt.
 COURSE_OVERVIEW_MAX_CHARS = 2500
 COURSE_OVERVIEW_ABOUT_ITEM_CHARS = 500
@@ -96,20 +95,24 @@ class ChatgptXBlock(StudioEditableXBlockMixin, XBlock):
     api_key = String(
         default="your-openai-api-key-here",
         scope=Scope.settings,
-        help="API key for the OpenAI-compatible endpoint",
+        help=(
+            "API key for the OpenAI-compatible endpoint. The course default "
+            "is the ai_assistant section of the course's Advanced Settings "
+            "(other_course_settings); set here only to override it for this "
+            "component. The placeholder default is treated as unset."
+        ),
     )
     base_url = String(
         display_name="API base URL",
-        # Resolved per-request by _resolve_base_url(): Studio value wins, then
-        # SiteConfiguration (CHATGPT_XBLOCK_BASE_URL key). If the site
-        # configuration has no default, this field is mandatory - questions
-        # are rejected otherwise rather than hitting the public OpenAI API.
         default="",
         scope=Scope.settings,
         help=(
             "Base URL of an OpenAI-compatible API endpoint (e.g. "
-            "https://gateway.example.com/v1). Required unless the platform "
-            "admin has set CHATGPT_XBLOCK_BASE_URL in the site configuration."
+            "https://gateway.example.com/v1). The course default is the "
+            "ai_assistant section of the course's Advanced Settings "
+            "(other_course_settings); set here only to override it for this "
+            "component. If neither is set, questions are rejected - no "
+            "fallback to the public OpenAI API."
         ),
     )
     description = String(
@@ -261,7 +264,9 @@ class ChatgptXBlock(StudioEditableXBlockMixin, XBlock):
         """
         try:
             item = store.get_item(course_key.make_usage_key("about", about_name))
-            text = _clean_html(getattr(item, "data", "") or "", COURSE_OVERVIEW_ABOUT_ITEM_CHARS)
+            text = _clean_html(
+                getattr(item, "data", "") or "", COURSE_OVERVIEW_ABOUT_ITEM_CHARS
+            )
             return "{}: {}".format(label, text) if text else ""
         except Exception:
             return ""
@@ -375,7 +380,11 @@ class ChatgptXBlock(StudioEditableXBlockMixin, XBlock):
             overview = django_cache.get(cache_key, _CACHE_MISS)
             if overview is _CACHE_MISS:
                 overview = self._collect_course_overview(course_key)
-                ttl = COURSE_OVERVIEW_CACHE_TTL if overview else COURSE_OVERVIEW_EMPTY_CACHE_TTL
+                ttl = (
+                    COURSE_OVERVIEW_CACHE_TTL
+                    if overview
+                    else COURSE_OVERVIEW_EMPTY_CACHE_TTL
+                )
                 django_cache.set(cache_key, overview, ttl)
             return overview or ""
         except Exception:
@@ -426,52 +435,50 @@ class ChatgptXBlock(StudioEditableXBlockMixin, XBlock):
 
     def _resolve_base_url(self):
         """
-        Resolve the AI endpoint base URL. Two layers, nothing more:
+        Resolve the AI endpoint base URL for this unit. Thin wrapper over the
+        shared resolver in ai_endpoint.py so the XBlock and the course-tab
+        backend share one implementation and one layering:
         1. Per-unit Studio setting (self.base_url) - course-team override.
-        2. SiteConfiguration JSON, key CHATGPT_XBLOCK_BASE_URL - the per-tenant
-           default (DB-backed, read at request time, so each Django Site can
-           point at its own gateway).
+        2. Course Advanced Settings (other_course_settings JSON, key
+           "ai_assistant") - per-course default set by the course team.
         Returns a non-empty URL string or None. None means unconfigured: when
-        the platform default is absent, the per-unit value is mandatory - the
-        block must never silently fall back to the public OpenAI API.
+        no layer provides a value, the request must be rejected - there is
+        no fallback to the public OpenAI API.
         """
-        url = (self.base_url or "").strip()
-        if url:
-            return url
-        try:
-            # LMS/CMS-only import: unavailable in the workbench, so fail soft.
-            from openedx.core.djangoapps.site_configuration.helpers import get_value
+        from chatgptxblock.ai_endpoint import get_course_block, resolve_endpoint
 
-            # String default selects get_value's raw-value fast path.
-            url = (get_value("CHATGPT_XBLOCK_BASE_URL", "") or "").strip()
-        except Exception:
-            url = ""
-        return url or None
+        base_url, _api_key, _error = resolve_endpoint(
+            course=get_course_block(self._resolve_course_key()),
+            unit_base_url=self.base_url,
+            unit_api_key=self.api_key,
+        )
+        return base_url
 
     def get_openai_client(self):
         """
-        Initialize and return an OpenAI client using the API key stored in the
-        XBlock settings and the base URL resolved from Studio or
-        SiteConfiguration.
+        Initialize and return an OpenAI client using the shared endpoint
+        resolution (Studio fields -> course Advanced Settings).
         """
-        api_key = self.api_key
-        base_url = self._resolve_base_url()
-        if not base_url:
-            # Mandatory: with no SiteConfiguration default, the unit must set
-            # its own endpoint - never fall back to the public OpenAI API.
-            return {
-                "error": (
-                    "No AI endpoint configured. Set the API base URL in the "
-                    "component settings (or ask the platform admin to set "
-                    "CHATGPT_XBLOCK_BASE_URL in the site configuration)."
-                )
-            }
+        from chatgptxblock.ai_endpoint import get_course_block, resolve_endpoint
+
+        base_url, api_key, error = resolve_endpoint(
+            course=get_course_block(self._resolve_course_key()),
+            unit_base_url=self.base_url,
+            unit_api_key=self.api_key,
+        )
+        if error:
+            return {"error": error}
         try:
             # Hard 15s timeout: a hung endpoint must never block a request
             # thread indefinitely. No automatic retries - the student repeats
-            # the question themselves via the UI.
+            # the question themselves via the UI. The OpenAI SDK refuses an
+            # empty api_key, so gateways that authenticate by network route
+            # get the conventional "EMPTY" sentinel instead.
             client = OpenAI(
-                api_key=api_key, base_url=base_url, timeout=15.0, max_retries=0
+                api_key=api_key or "EMPTY",
+                base_url=base_url,
+                timeout=15.0,
+                max_retries=0,
             )
             return client
         except Exception:
@@ -536,9 +543,9 @@ class ChatgptXBlock(StudioEditableXBlockMixin, XBlock):
         if not question:
             return {"answer": "Please enter a question."}
 
-        # Endpoint must be resolved (unit setting or SiteConfiguration) before
-        # anything is sent anywhere; get_openai_client refuses to build a
-        # client against the public OpenAI default.
+        # Endpoint must be resolved (unit setting or course Advanced Settings)
+        # before anything is sent anywhere; get_openai_client refuses to build
+        # a client against the public OpenAI default.
         client = self.get_openai_client()
         if not isinstance(client, OpenAI):
             return {
@@ -619,9 +626,11 @@ class ChatgptXBlock(StudioEditableXBlockMixin, XBlock):
         if not response.choices:
             return {"error": "No response received from the model. Please try again."}
 
-        content = response.choices[0].message.content.strip() if (
-            response.choices[0].message.content
-        ) else ""
+        content = (
+            response.choices[0].message.content.strip()
+            if (response.choices[0].message.content)
+            else ""
+        )
         if not content:
             return {
                 "error": (
